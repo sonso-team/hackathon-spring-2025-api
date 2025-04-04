@@ -23,5 +23,4 @@ class SocketSender(
         logger.debug("timestamp: {}, value: {}", data["timestamp"], data["value"])
         messagingTemplate.convertAndSend("/topic/data", data)
     }
-
 }

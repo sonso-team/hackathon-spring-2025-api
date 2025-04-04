@@ -9,5 +9,5 @@ import org.springframework.scheduling.annotation.EnableScheduling
 class HackathonSpring2025ApiApplication
 
 fun main(args: Array<String>) {
-	runApplication<HackathonSpring2025ApiApplication>(*args)
+    runApplication<HackathonSpring2025ApiApplication>(*args)
 }
