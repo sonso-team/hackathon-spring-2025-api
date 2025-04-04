@@ -86,9 +86,9 @@ jobs:
           fi
           docker compose -f ${{ env.TARGET_DIR }}/docker-compose.yml up --build -d
           sleep 60
-          if docker compose -f ${{ env.TARGET_DIR }}/docker-compose.yml logs | grep -i "\[ERROR\]"; then
+          if docker compose -f ${{ env.TARGET_DIR }}/docker-compose.yml logs | grep -i "] ERROR ; then
             echo "Ошибка деплоя. В логах найдены ошибки"
-            docker compose -f ${{ env.TARGET_DIR }}/docker-compose.yml logs | grep -i "\[ERROR\]";
+            docker compose -f ${{ env.TARGET_DIR }}/docker-compose.yml logs | grep -i "] ERROR ";
             exit 1
           else
             echo "Ошибок в логах не найдено. Деплой успешен"

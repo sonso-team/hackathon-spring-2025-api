@@ -12,7 +12,7 @@ spring:
   datasource:
     username: hack
     password: hack
-    #    url: jdbc:postgresql://hack_db:5432/hack  # docker-compose
-    url: jdbc:postgresql://localhost:7100/hack   # idea
+    url: jdbc:postgresql://hack_db:5432/hack  # docker-compose
+#    url: jdbc:postgresql://localhost:7100/hack   # idea
     driver-class-name: org.postgresql.Driver
 
