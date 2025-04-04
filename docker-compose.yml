@@ -1,0 +1,38 @@
+services:
+  bludce-db:
+    image: postgres:16.3
+    container_name: bludce-db
+    hostname: bludce_db
+    restart: always
+    environment:
+      POSTGRES_DB: "bludce"
+      POSTGRES_USER: "bludce"
+      POSTGRES_PASSWORD: "bludce"
+    volumes:
+      - /home/kinoko/postgresql/bludce:/var/lib/postgresql/data
+    #      - ./postgresql/bludce_psql:/var/lib/postgresql/data    # Для отладки на windows машине
+    networks:
+      - backend
+    ports:
+      - "5700:5432"
+
+  bludce-api:
+    build:
+      dockerfile: ./Dockerfile
+      context: ./
+    restart: always
+    image: bludce-api
+    container_name: bludce-api
+    depends_on:
+      - bludce-db
+    volumes:
+      - /home/kinoko/logs/bludce-api:/logs
+#      - ./logs/bludce-api:/logs                                # Для отладки на windows машине
+    networks:
+      - backend
+    ports:
+      - "7200:7200"
+
+networks:
+  backend:
+    external: true

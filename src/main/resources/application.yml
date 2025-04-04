@@ -1,0 +1,12 @@
+logging:
+  config: 'classpath:log4j2.yml'
+  level:
+    org.sonso: debug
+
+server:
+  port: 7000
+
+spring:
+  application:
+    name: hackathon-spring-2025-api
+
