@@ -1,37 +1,35 @@
 services:
-  bludce-db:
+  hack-db:
     image: postgres:16.3
-    container_name: bludce-db
-    hostname: bludce_db
+    container_name: hack-db
+    hostname: hack_db
     restart: always
     environment:
-      POSTGRES_DB: "bludce"
-      POSTGRES_USER: "bludce"
-      POSTGRES_PASSWORD: "bludce"
+      POSTGRES_DB: "hack"
+      POSTGRES_USER: "hack"
+      POSTGRES_PASSWORD: "hack"
     volumes:
-      - /home/kinoko/postgresql/bludce:/var/lib/postgresql/data
-    #      - ./postgresql/bludce_psql:/var/lib/postgresql/data    # Для отладки на windows машине
+      - /home/kinoko/postgresql/hack:/var/lib/postgresql/data
     networks:
       - backend
     ports:
-      - "5700:5432"
+      - "7100:5432"
 
-  bludce-api:
+  hack-api:
     build:
       dockerfile: ./Dockerfile
       context: ./
     restart: always
-    image: bludce-api
-    container_name: bludce-api
+    image: hack-api
+    container_name: hack-api
     depends_on:
-      - bludce-db
+      - hack-db
     volumes:
-      - /home/kinoko/logs/bludce-api:/logs
-#      - ./logs/bludce-api:/logs                                # Для отладки на windows машине
+      - /home/kinoko/logs/hack-api:/logs
     networks:
       - backend
     ports:
-      - "7200:7200"
+      - "7000:7000"
 
 networks:
   backend:
