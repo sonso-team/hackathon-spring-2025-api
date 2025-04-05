@@ -19,20 +19,21 @@ java {
 	}
 }
 
-repositories {
-	mavenCentral()
-}
-
 dependencyManagement {
 	imports {
 		mavenBom("org.springframework.cloud:spring-cloud-dependencies:2024.0.0")
 	}
 }
 
+repositories {
+	mavenCentral()
+}
+
 dependencies {
 	// Kotlin
-	implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
 	implementation("org.jetbrains.kotlin:kotlin-reflect")
+	implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
+	implementation("org.jetbrains.kotlin:kotlin-stdlib")
 
 	// WebSocket
 	implementation("org.springframework.boot:spring-boot-starter-web")
@@ -53,12 +54,18 @@ dependencies {
 	// Logging
 	implementation("io.github.microutils:kotlin-logging-jvm:3.0.5")
 	implementation("org.springframework.boot:spring-boot-starter-log4j2")
-	implementation("org.springframework.boot:spring-boot-starter-actuator")
+	implementation("org.springframework.boot:spring-boot-starter")
 
 	// Test
 	testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
+}
+
+kotlin {
+	compilerOptions {
+		freeCompilerArgs.addAll("-Xjsr305=strict")
+	}
 }
 
 detekt {
@@ -73,16 +80,6 @@ configurations {
 	}
 }
 
-kotlin {
-	compilerOptions {
-		freeCompilerArgs.addAll("-Xjsr305=strict")
-	}
-}
-
-tasks.withType<Test> {
-	useJUnitPlatform()
-}
-
 tasks.withType<Jar> {
 	enabled = false
 }
@@ -90,4 +87,8 @@ tasks.withType<Jar> {
 tasks.withType<BootJar> {
 	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 	enabled = true
+}
+
+tasks.withType<Test> {
+	useJUnitPlatform()
 }
