@@ -1,5 +1,4 @@
-logging:
-  config: 'classpath:log4j2.yml'
+#logging:
 #  level:
 #    org.sonso: debug
 
