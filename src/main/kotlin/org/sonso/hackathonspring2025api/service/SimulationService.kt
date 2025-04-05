@@ -13,6 +13,7 @@ import kotlin.math.min
 import kotlin.math.sqrt
 
 private const val N_SIM = 1000
+private const val NO_HISTORY_RACES = 3
 
 @Service
 class SimulationService(
@@ -127,10 +128,17 @@ class SimulationService(
             results.add(RaceResult(athletes[idx].name, tfin, rank + 1))
         }
 
-        // Обновляем mu, sigma1, sigma2, учитывая 25 последних забегов И этот
-        updateAthleteParamsLinearly(athletes, results, memoryWindow = 25)
+        // ВАЖНО: ПЕРВЫЕ N ЗАБЕГОВ БЕЗ УЧЁТА ИСТОРИИ
+        // Если мы уже сделали не меньше N забегов, тогда начинаем обновлять параметры:
+        if (raceIndexCounter >= NO_HISTORY_RACES) {
+            updateAthleteParamsLinearly(athletes, results, memoryWindow = 25)
+        } else {
+            // Либо вообще пропускаем обновление,
+            // либо используем "пустой" update, как хотите
+            logger.info("  -> Пропускаем обновление mu/sigma (raceIndex=$raceIndexCounter < $NO_HISTORY_RACES)")
+        }
 
-        // Сохраняем в Redis полную историю. (new record)
+        // Сохраняем в Redis запись об этом забеге
         val record = RaceHistoryRecord(
             raceIndex = raceIndexCounter,
             results = results
@@ -150,7 +158,7 @@ class SimulationService(
     private fun buildSyncResponse(): RaceResponse {
         return RaceResponse(
             type = ResponseType.SYNC,
-            remainBefore = Date(), // просто текущее время,
+            remainBefore = Date(), // просто текущее время
             history = loadLast10History(),   // показываем последние 10 забегов
             isRunning = true,
             lastResults = emptyList(),       // при SYNC не отправляем
@@ -182,11 +190,12 @@ class SimulationService(
     }
 
     /**
-     * Собрать список HistoryItem для текущего состояния забега (probabilities и т.д.).
+     * Собрать список HistoryItem для текущего состояния забега (probabilities и т.д.),
+     * включая заполнение pairProbabilities из pairTop2Probs.
      */
     private fun buildCurrentRun(): List<RaceResponse.HistoryItem> {
         if (!isRaceRunning || distances == null) return emptyList()
- 
+
         val stats = simulateFuturePositions(
             currentDistances = distances!!,
             currentTime = currentTimeSeconds,
@@ -195,9 +204,23 @@ class SimulationService(
 
         val out = mutableListOf<RaceResponse.HistoryItem>()
         for (i in athletes.indices) {
-            val pArray = stats.probsByPlace[i]
-            val pTop2 = pArray.getOrElse(0) { 0.0 } + pArray.getOrElse(1) { 0.0 }
-            val pTop3 = pTop2 + pArray.getOrElse(2) { 0.0 }
+            // Сырые вероятности занять места 1..6
+            val raw = stats.probsByPlace[i]
+            // Прогоняем clamp+norm
+            val finalProbs = clampAndNormalizeProbs(raw)
+
+            val rawP1 = finalProbs[0]
+            val rawP2 = finalProbs[1]
+            val rawP3 = finalProbs[2]
+            val rawP4 = finalProbs[3]
+            val rawP5 = finalProbs[4]
+            val rawP6 = finalProbs[5]
+
+            // Сумма гарантированно=1, никаких 0.0 или 1.0
+            val pTop2 = rawP1 + rawP2
+            val pTop3 = pTop2 + rawP3
+
+            val pairProb = buildPairProbabilities(i, stats)
 
             out.add(
                 RaceResponse.HistoryItem(
@@ -205,22 +228,90 @@ class SimulationService(
                     place = calcCurrentPlace(i),
                     progress = distances!![i],
                     probabilities = RaceResponse.Probabilities(
-                        pos1 = pArray.getOrElse(0) { 0.0 },
-                        pos2 = pArray.getOrElse(1) { 0.0 },
-                        pos3 = pArray.getOrElse(2) { 0.0 },
-                        pos4 = pArray.getOrElse(3) { 0.0 },
-                        pos5 = pArray.getOrElse(4) { 0.0 },
-                        pos6 = pArray.getOrElse(5) { 0.0 },
+                        pos1 = rawP1,
+                        pos2 = rawP2,
+                        pos3 = rawP3,
+                        pos4 = rawP4,
+                        pos5 = rawP5,
+                        pos6 = rawP6,
                         inThree = pTop3,
                         inTwo = pTop2
                     ),
-                    pairProbabilities = RaceResponse.PairProbabilities(
-                        a = 0.0, b = 0.0, c = 0.0, d = 0.0, e = 0.0, f = 0.0
-                    )
+                    pairProbabilities = pairProb
                 )
             )
         }
         return out
+    }
+
+    /**
+     * Для одного спортсмена имеем сырые вероятности rawP[0..5].
+     * 1) Clamp: зажимаем их в диапазон [0.001..0.999]
+     * 2) Нормируем, чтобы сумма снова была 1
+     * 3) (Опционально) округляем по желанию
+     *
+     * Возвращаем DoubleArray из 6 вероятностей, которые суммируются в 1, и каждая в [0.001..0.999].
+     */
+    private fun clampAndNormalizeProbs(rawP: DoubleArray): DoubleArray {
+        // 1) Зажимаем
+        val minVal = 0.001
+        val maxVal = 0.999
+        val clamped = rawP.map { p ->
+            when {
+                p < minVal -> minVal
+                p > maxVal -> maxVal
+                else -> p
+            }
+        }
+
+        // 2) Нормируем
+        val sum = clamped.sum()
+        // если sum=0 (вдруг все были 0?), чтобы не делить на 0
+        if (sum <= 0) {
+            // равномерно распределим
+            return DoubleArray(6) { 1.0 / 6.0 }
+        }
+
+        val normalized = clamped.map { it / sum }
+
+        // 3) (Опционально) округлим, например, до 4 знаков (в расчёте)
+        // но тогда сумма может уйти от 1.
+        // Можно округлять только при отображении.
+        return normalized.toDoubleArray()
+    }
+
+
+    /**
+     * Для спортсмена i возвращает PairProbabilities,
+     * т.е. вероятность (i=1-е, j=2-е) для j="a","b","c","d","e","f".
+     * Считаем, что athletes[0] = "A", [1]="B", ..., [5]="F".
+     */
+    private fun buildPairProbabilities(
+        i: Int,
+        stats: SimulationStats
+    ): RaceResponse.PairProbabilities {
+        // Найдём индексы спортсменов A..F
+        // Если у вас порядок другой, скорректируйте!
+        val indexA = athletes.indexOfFirst { it.name == "A" }
+        val indexB = athletes.indexOfFirst { it.name == "B" }
+        val indexC = athletes.indexOfFirst { it.name == "C" }
+        val indexD = athletes.indexOfFirst { it.name == "D" }
+        val indexE = athletes.indexOfFirst { it.name == "E" }
+        val indexF = athletes.indexOfFirst { it.name == "F" }
+
+        // Функция достаёт stats.pairTop2Probs[(i, j)] или 0.0
+        fun prob(i1: Int, i2: Int): Double {
+            return stats.pairTop2Probs[Pair(i1, i2)] ?: 0.0
+        }
+
+        return RaceResponse.PairProbabilities(
+            a = if (indexA != -1) prob(i, indexA) else 0.0,
+            b = if (indexB != -1) prob(i, indexB) else 0.0,
+            c = if (indexC != -1) prob(i, indexC) else 0.0,
+            d = if (indexD != -1) prob(i, indexD) else 0.0,
+            e = if (indexE != -1) prob(i, indexE) else 0.0,
+            f = if (indexF != -1) prob(i, indexF) else 0.0,
+        )
     }
 
     private fun calcCurrentPlace(i: Int): Int {
@@ -260,8 +351,7 @@ class SimulationService(
             raceMap[athlete.name]?.let { athlete.history.add(it) }
         }
 
-        // Чтобы учесть ровно 25 последних забегов – возьмём для каждого атлета его history (все забеги),
-        // но используем только последние 25
+        // Чтобы учесть ровно 25 последних забегов – берём из history только хвост
         for (athlete in athletes) {
             val hist = athlete.history
             if (hist.isEmpty()) continue
@@ -318,7 +408,7 @@ class SimulationService(
     private fun simulateFuturePositions(
         currentDistances: DoubleArray,
         currentTime: Double,
-        athletes: List<Athlete>,
+        athletes: List<Athlete>
     ): SimulationStats {
         val k = athletes.size
         val placeCounts = Array(k) { DoubleArray(k) { 0.0 } }
