@@ -44,6 +44,9 @@ dependencies {
 	runtimeOnly("org.postgresql:postgresql")
 	implementation("org.springframework.boot:spring-boot-starter-data-jpa")
 
+	// Redis
+	implementation("org.springframework.boot:spring-boot-starter-data-redis")
+
 	// Logging
 	implementation("io.github.microutils:kotlin-logging-jvm:3.0.5")
 	implementation("org.springframework.boot:spring-boot-starter-log4j2")

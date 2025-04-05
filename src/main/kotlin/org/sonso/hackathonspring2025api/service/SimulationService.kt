@@ -1,137 +1,94 @@
 package org.sonso.hackathonspring2025api.service
 
 import org.slf4j.LoggerFactory
-import org.sonso.hackathonspring2025api.dto.Athlete
-import org.sonso.hackathonspring2025api.dto.PairKey
-import org.sonso.hackathonspring2025api.dto.RaceResult
-import org.sonso.hackathonspring2025api.dto.SimulationStats
+import org.sonso.hackathonspring2025api.dto.*
 import org.sonso.hackathonspring2025api.dto.response.RaceResponse
 import org.sonso.hackathonspring2025api.dto.response.ResponseType
+import org.sonso.hackathonspring2025api.repository.RaceHistoryRepository
 import org.springframework.stereotype.Service
-import java.util.*
+import java.util.Date
+import java.util.Random
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
 
+private const val N_SIM = 1000
+
 @Service
-class SimulationService {
+class SimulationService(
+    private val historyRepo: RaceHistoryRepository
+) {
     private val logger = LoggerFactory.getLogger(SimulationService::class.java)
     private val random = Random()
 
     // =========================================
-    //  1) Состояние "между забегами" и "идёт забег"
+    //  1) Пауза между забегами, текущее состояние
     // =========================================
 
-    /**
-     * Когда стартует следующий забег (в мс, System.currentTimeMillis()).
-     * Если текущая метка времени < nextRaceStartTime, значит ждём.
-     * Если текущее время >= nextRaceStartTime, можно стартовать новый забег.
-     */
     var nextRaceStartTime: Long = 0L
-
-    /**
-     * Флаг, идёт ли в данный момент забег.
-     */
     var isRaceRunning = false
-
-    // 10 секунд пауза между забегами (в мс)
-    val RACE_PAUSE_MS = 10_000L
-
-    // История забегов в формате, подходящем фронту:
-    // максимум 10 последних.
-    // Каждый элемент списка – список HistoryItem (для одного забега).
-    private val historyForFront: MutableList<List<RaceResponse.HistoryItem>> = mutableListOf()
-
-    // =========================================
-    //  2) Модель спортсменов, хранит результаты для обновления mu, sigma1, sigma2
-    // =========================================
+    val RACE_PAUSE_MS = 10_000L  // 10 секунд
+    private var raceIndexCounter = historyRepo.findAllRecords().lastIndex
 
     private val athletes = mutableListOf<Athlete>()
 
-    // Инициализация спортсменов
-    private fun initializeAthletes() {
-        val names = listOf("A", "B", "C", "D", "E", "F")
-        athletes.clear()
-        athletes.addAll(
-            names.map { name ->
-                Athlete(
-                    name = name,
-                    mu = 10.0 + random.nextDouble() * 2.0, // mu в диапазоне [10, 12)
-                    sigma1 = 0.3,
-                    sigma2 = 0.6,
-                    history = mutableListOf()
-                )
-            }
-        )
-        logger.info("Спортсмены инициализированы: ${athletes.map { it.name }}")
-    }
+    // Текущие показатели забега
+    private var distances: DoubleArray? = null
+    private var finishTimes: Array<Double?>? = null
+    private var currentTimeSeconds = 0.0
 
     // =========================================
-    //  3) Логика расстановки, симуляции, обновления
+    //  2) Метод, вызываемый каждую секунду шедуллером
     // =========================================
 
     fun runScheduledLogic(): RaceResponse {
         val now = System.currentTimeMillis()
 
-        // Если ещё нет спортсменов – создаём
         if (athletes.isEmpty()) {
+            // Инициализируем, если ещё не делали этого
             initializeAthletes()
-            // Сразу можно запланировать 1-й забег "сейчас" (nextRaceStartTime=now)
             nextRaceStartTime = now
         }
 
         return if (!isRaceRunning) {
-            // Забег НЕ идёт
+            // ЗАБЕГ НЕ ИДЁТ
             if (now >= nextRaceStartTime) {
-                // Пора начать новый забег
+                // Пора стартовать новый
                 startNewRace()
-                // Сразу возвращаем sync, потому что гонка стартовала только что
-                buildSyncResponse()
+                buildSyncResponse() // только что стартовали
             } else {
-                // Пока ждём (между забегами) – сборка UPDATE:
-                //   фронт хочет "lastResults" и "history" и remainBefore = когда будет начало гонки
+                // Ждём старта
                 buildUpdateResponse()
             }
         } else {
-            // Забег идёт – присылаем SYNC
-            // (если внутри забег закончится, на следующем тике шедуллера увидим)
+            // ЗАБЕГ ИДЁТ
             val raceFinished = updateRaceOneStep()
             if (raceFinished) {
-                // Забег только что завершился
                 finishRace()
-                // Посылаем UPDATE, чтобы фронт получил новые lastResults, history и 10-секундный таймер
                 buildUpdateResponse()
             } else {
-                // Забег ещё не завершён – просто SYNC
                 buildSyncResponse()
             }
         }
     }
 
-    /**
-     * Старт нового забега
-     */
+    // =========================================
+    //  3) Старт, шаг, финиш забега
+    // =========================================
+
     private fun startNewRace() {
-        logger.info("Старт нового забега!")
+        logger.info("СТАРТ нового забега №$raceIndexCounter")
         isRaceRunning = true
-        // Инициируем расчёты
         distances = DoubleArray(athletes.size) { 0.0 }
         finishTimes = arrayOfNulls(athletes.size)
         currentTimeSeconds = 0.0
     }
 
-    /**
-     * Обновление состояния забега (шаг в 1с),
-     * Возвращает true, если забег в процессе этого шага завершился.
-     */
     private fun updateRaceOneStep(): Boolean {
         val k = athletes.size
-        if (finishTimes == null) return true // safety-check
+        if (finishTimes == null) return true
 
         val dt = 1.0
-        var raceFinished = false
-
-        // Ещё не финишировавшим игрокам прибавляем дистанцию
         for (i in 0 until k) {
             if (finishTimes!![i] == null) {
                 val baseSpeed = 100.0 / athletes[i].mu
@@ -151,26 +108,17 @@ class SimulationService {
                 }
             }
         }
-
         currentTimeSeconds += dt
-        // Проверка, все ли добежали
-        raceFinished = finishTimes!!.all { it != null }
-
-        return raceFinished
+        return finishTimes!!.all { it != null }
     }
 
-    /**
-     * Завершение забега: формируем результаты, обновляем mu/sigma,
-     * добавляем запись в историю (historyForFront), планируем след. забег через 10с.
-     */
     private fun finishRace() {
-        val raceIndex = (athletes.first().history.size) + 1
-        logger.info("Забег №$raceIndex завершён")
+        logger.info("ФИНИШ забега №$raceIndexCounter")
         isRaceRunning = false
         nextRaceStartTime = System.currentTimeMillis() + RACE_PAUSE_MS
 
-        // Формируем результаты
-        val runnersInfo = finishTimes!!.mapIndexed { index, ft -> index to (ft ?: Double.POSITIVE_INFINITY) }
+        // Считаем итоги
+        val runnersInfo = finishTimes!!.mapIndexed { idx, ft -> idx to (ft ?: Double.POSITIVE_INFINITY) }
             .sortedBy { it.second }
         val results = mutableListOf<RaceResult>()
         runnersInfo.forEachIndexed { rank, pair ->
@@ -179,142 +127,188 @@ class SimulationService {
             results.add(RaceResult(athletes[idx].name, tfin, rank + 1))
         }
 
-        // Обновляем параметры
-        updateAthleteParamsLinearly(athletes, results, 20)
+        // Обновляем mu, sigma1, sigma2, учитывая 25 последних забегов И этот
+        updateAthleteParamsLinearly(athletes, results, memoryWindow = 25)
 
-        // Добавляем в историю (для фронта) – по одному HistoryItem на спортсмена
-        val newHistoryRow: List<RaceResponse.HistoryItem> = runnersInfo.mapIndexed { rank, pair ->
-            val idx = pair.first
-            val tfin = pair.second
-            RaceResponse.HistoryItem(
-                id = athletes[idx].name.lowercase(),  // "a", "b", ...
-                place = rank + 1
-            )
-        }
-        // ограничим историю 10 записями (10 последних забегов)
-        if (historyForFront.size == 10) {
-            historyForFront.removeAt(0)
-        }
-        historyForFront.add(newHistoryRow)
+        // Сохраняем в Redis полную историю. (new record)
+        val record = RaceHistoryRecord(
+            raceIndex = raceIndexCounter,
+            results = results
+        )
+        historyRepo.addRecord(record)
 
-        // Сносим "рабочие" поля (distances, finishTimes)
+        raceIndexCounter += 1
+
         distances = null
         finishTimes = null
     }
 
     // =========================================
-    //  4) Подготовка нужных структур для RaceResponse
+    //  4) Сборка DTO для фронта: SYNC и UPDATE
     // =========================================
 
-    /**
-     * Собрать RaceResponse с типом SYNC
-     * (инфа о текущих позициях бегунов, их вероятностях, isRunning=true).
-     */
     private fun buildSyncResponse(): RaceResponse {
-        val remain = Date() // на SYNC часто всё равно, но дадим текущее время
-        val curRun = buildCurrentRunItems() // прогресс и вероятности
-
         return RaceResponse(
             type = ResponseType.SYNC,
-            remainBefore = remain,
-            history = historyForFront,
+            remainBefore = Date(), // просто текущее время,
+            history = loadLast10History(),   // показываем последние 10 забегов
             isRunning = true,
-            lastResults = emptyList(),  // при SYNC "прошлые результаты" не отправляем
-            currentRun = curRun
+            lastResults = emptyList(),       // при SYNC не отправляем
+            currentRun = buildCurrentRun()
         )
     }
 
-    /**
-     * Собрать RaceResponse с типом UPDATE
-     * (после завершения забега или пока ждём следующий).
-     */
     private fun buildUpdateResponse(): RaceResponse {
-        val remain = Date(nextRaceStartTime) // когда начнётся новый забег
-        val curRun = if (isRaceRunning) buildCurrentRunItems() else emptyList()
-        val lastRes = if (!isRaceRunning && historyForFront.isNotEmpty()) {
-            // берём последний блок из истории
-            historyForFront.last()
+        val remain = Date(nextRaceStartTime)
+        val lastRes = if (!isRaceRunning) {
+            // последний забег = самая свежая запись в Redis
+            val lastRace = historyRepo.findLastNRecords(1).firstOrNull()
+            lastRace?.results?.map { r ->
+                RaceResponse.HistoryItem(
+                    id = r.name.lowercase(),
+                    place = r.place
+                )
+            } ?: emptyList()
         } else emptyList()
 
         return RaceResponse(
             type = ResponseType.UPDATE,
             remainBefore = remain,
-            history = historyForFront,
+            history = loadLast10History(),
             isRunning = isRaceRunning,
             lastResults = lastRes,
-            currentRun = curRun
+            currentRun = if (isRaceRunning) buildCurrentRun() else emptyList()
         )
     }
 
     /**
-     * Собираем список HistoryItem для текущего момента забега (когда он идёт).
-     * Включает прогресс, вероятность занять каждое место, etc.
+     * Собрать список HistoryItem для текущего состояния забега (probabilities и т.д.).
      */
-    private fun buildCurrentRunItems(): List<RaceResponse.HistoryItem> {
+    private fun buildCurrentRun(): List<RaceResponse.HistoryItem> {
         if (!isRaceRunning || distances == null) return emptyList()
-
-        val k = athletes.size
-        // Прогнозируем распределения мест
+ 
         val stats = simulateFuturePositions(
             currentDistances = distances!!,
             currentTime = currentTimeSeconds,
-            athletes = athletes,
-            nSim = 1000
+            athletes = athletes
         )
 
         val out = mutableListOf<RaceResponse.HistoryItem>()
-        for (i in 0 until k) {
-            // Вероятности занять каждое место (1..6)
+        for (i in athletes.indices) {
             val pArray = stats.probsByPlace[i]
-            // P(top2) = p(1) + p(2)
             val pTop2 = pArray.getOrElse(0) { 0.0 } + pArray.getOrElse(1) { 0.0 }
-            // P(top3) = pTop2 + p(3)
             val pTop3 = pTop2 + pArray.getOrElse(2) { 0.0 }
 
-            val item = RaceResponse.HistoryItem(
-                id = athletes[i].name.lowercase(),  // "a", "b", ...
-                place = calcCurrentPlace(i),         // какая позиция "по дистанции" прямо сейчас
-                progress = distances!![i],           // текущее количество метров (0..100)
-                probabilities = RaceResponse.Probabilities(
-                    pos1 = pArray.getOrElse(0) { 0.0 },
-                    pos2 = pArray.getOrElse(1) { 0.0 },
-                    pos3 = pArray.getOrElse(2) { 0.0 },
-                    pos4 = pArray.getOrElse(3) { 0.0 },
-                    pos5 = pArray.getOrElse(4) { 0.0 },
-                    pos6 = pArray.getOrElse(5) { 0.0 },
-                    inThree = pTop3,
-                    inTwo = pTop2
-                ),
-                // Для примера поле pairProbabilities можно заполнить чем-то,
-                // но ТЗ не совсем понятно, как фронт хочет эти данные видеть (вероятность чего именно?)
-                // Допустим, сделаем заглушку. Или можно полностью убрать, если не нужно.
-                pairProbabilities = RaceResponse.PairProbabilities(
-                    a = 0.0, b = 0.0, c = 0.0, d = 0.0, e = 0.0, f = 0.0
+            out.add(
+                RaceResponse.HistoryItem(
+                    id = athletes[i].name.lowercase(),
+                    place = calcCurrentPlace(i),
+                    progress = distances!![i],
+                    probabilities = RaceResponse.Probabilities(
+                        pos1 = pArray.getOrElse(0) { 0.0 },
+                        pos2 = pArray.getOrElse(1) { 0.0 },
+                        pos3 = pArray.getOrElse(2) { 0.0 },
+                        pos4 = pArray.getOrElse(3) { 0.0 },
+                        pos5 = pArray.getOrElse(4) { 0.0 },
+                        pos6 = pArray.getOrElse(5) { 0.0 },
+                        inThree = pTop3,
+                        inTwo = pTop2
+                    ),
+                    pairProbabilities = RaceResponse.PairProbabilities(
+                        a = 0.0, b = 0.0, c = 0.0, d = 0.0, e = 0.0, f = 0.0
+                    )
                 )
             )
-            out.add(item)
         }
         return out
     }
 
-    /**
-     * Считаем, на каком месте (1..6) сейчас находится спортсмен i
-     * по дистанции. Если одинаковая дистанция – пусть будет произвольный порядок.
-     */
     private fun calcCurrentPlace(i: Int): Int {
         val sorted = distances!!.withIndex().sortedByDescending { it.value }
-        // Поиск idx i
-        val rank = sorted.indexOfFirst { it.index == i }
-        return rank + 1
+        return sorted.indexOfFirst { it.index == i } + 1
+    }
+
+    /**
+     * Возвращаем последние 10 забегов из Redis (на фронт в поле history).
+     */
+    private fun loadLast10History(): List<List<RaceResponse.HistoryItem>> {
+        // Берём из Redis последние 10 записей
+        val last10 = historyRepo.findLastNRecords(10).sortedBy { it.raceIndex }
+        // Превращаем каждый RaceHistoryRecord в список HistoryItem
+        return last10.map { record ->
+            record.results.sortedBy { it.place }.map { r ->
+                RaceResponse.HistoryItem(
+                    id = r.name.lowercase(),
+                    place = r.place
+                )
+            }
+        }
     }
 
     // =========================================
-    //  5) Математика
+    //  5) Логика обновления параметров (учёт последних 25 забегов)
     // =========================================
 
-    private var distances: DoubleArray? = null
-    private var finishTimes: Array<Double?>? = null
-    private var currentTimeSeconds = 0.0
+    fun updateAthleteParamsLinearly(
+        athletes: List<Athlete>,
+        raceResults: List<RaceResult>,
+        memoryWindow: Int
+    ) {
+        // добавляем текущий забег в history
+        val raceMap = raceResults.associateBy { it.name }
+        for (athlete in athletes) {
+            raceMap[athlete.name]?.let { athlete.history.add(it) }
+        }
+
+        // Чтобы учесть ровно 25 последних забегов – возьмём для каждого атлета его history (все забеги),
+        // но используем только последние 25
+        for (athlete in athletes) {
+            val hist = athlete.history
+            if (hist.isEmpty()) continue
+            val recent = if (hist.size > memoryWindow) hist.takeLast(memoryWindow) else hist
+            val W = recent.size
+            if (W == 1) {
+                val onlyFt = recent[0].finishTime
+                athlete.mu = onlyFt
+                athlete.sigma1 = 0.1 * onlyFt
+                athlete.sigma2 = 0.15 * onlyFt
+                continue
+            }
+            val rev = recent.reversed()
+            val alpha = 1.0 / (W - 1)
+            val weights = rev.indices.map { i -> max(1.0 - i * alpha, 0.0) }
+            val sW = weights.sum()
+            val finishTimes = rev.map { it.finishTime }
+            val muNew = finishTimes.zip(weights).sumOf { (ft, w) -> ft * w } / sW
+            val varNew = finishTimes.zip(weights).sumOf { (ft, w) ->
+                val diff = ft - muNew
+                w * diff * diff
+            } / sW
+            val stdNew = sqrt(varNew)
+            athlete.mu = muNew
+            athlete.sigma1 = 0.7 * stdNew
+            athlete.sigma2 = 1.3 * stdNew
+        }
+    }
+
+    // =========================================
+    //  6) Хелперы
+    // =========================================
+
+    private fun initializeAthletes() {
+        val names = listOf("A", "B", "C", "D", "E", "F")
+        athletes.clear()
+        athletes.addAll(names.map { name ->
+            Athlete(
+                name = name,
+                mu = 10.0 + random.nextDouble() * 2.0,
+                sigma1 = 0.3,
+                sigma2 = 0.6,
+                history = mutableListOf()
+            )
+        })
+        logger.info("Спортсмены инициализированы: ${athletes.map { it.name }}")
+    }
 
     private fun skewedNormal(mu: Double, sigma1: Double, sigma2: Double): Double {
         val z = random.nextGaussian()
@@ -325,14 +319,12 @@ class SimulationService {
         currentDistances: DoubleArray,
         currentTime: Double,
         athletes: List<Athlete>,
-        nSim: Int = 2000
     ): SimulationStats {
         val k = athletes.size
         val placeCounts = Array(k) { DoubleArray(k) { 0.0 } }
         val pairTop2Counts = mutableMapOf<Pair<Int, Int>, Int>()
         val pairAllCounts = mutableMapOf<PairKey, Int>()
 
-        // Инициализируем для top2
         for (i in 0 until k) {
             for (j in 0 until k) {
                 if (i != j) {
@@ -341,17 +333,17 @@ class SimulationService {
             }
         }
 
-        repeat(nSim) {
-            val distances = currentDistances.copyOf()
+        repeat(N_SIM) {
+            val simDistances = currentDistances.copyOf()
             val finishedTime = DoubleArray(k) { Double.POSITIVE_INFINITY }
 
             for (i in 0 until k) {
-                if (distances[i] >= 100.0) {
+                if (simDistances[i] >= 100.0) {
                     finishedTime[i] = currentTime
                 } else {
                     var fullTime = skewedNormal(athletes[i].mu, athletes[i].sigma1, athletes[i].sigma2)
                     if (fullTime < 0.1) fullTime = 0.1
-                    val ratioDone = min(distances[i] / 100.0, 1.0)
+                    val ratioDone = min(simDistances[i] / 100.0, 1.0)
                     val timeLeft = fullTime * (1.0 - ratioDone)
                     finishedTime[i] = currentTime + timeLeft
                 }
@@ -376,50 +368,10 @@ class SimulationService {
         }
 
         val probsByPlace = Array(k) { i ->
-            DoubleArray(k) { j -> placeCounts[i][j] / nSim }
+            DoubleArray(k) { j -> placeCounts[i][j] / N_SIM }
         }
-        val pairTop2Probs = pairTop2Counts.mapValues { it.value.toDouble() / nSim }
-        val pairAllProbs = pairAllCounts.mapValues { it.value.toDouble() / nSim }
+        val pairTop2Probs = pairTop2Counts.mapValues { it.value.toDouble() / N_SIM }
+        val pairAllProbs = pairAllCounts.mapValues { it.value.toDouble() / N_SIM }
         return SimulationStats(probsByPlace, pairTop2Probs, pairAllProbs)
-    }
-
-    fun updateAthleteParamsLinearly(
-        athletes: List<Athlete>,
-        raceResults: List<RaceResult>,
-        memoryWindow: Int = 5
-    ) {
-        val raceMap = raceResults.associateBy { it.name }
-        for (athlete in athletes) {
-            raceMap[athlete.name]?.let { result ->
-                athlete.history.add(result)
-            }
-        }
-        for (athlete in athletes) {
-            val hist = athlete.history
-            if (hist.isEmpty()) continue
-            val recent = if (hist.size > memoryWindow) hist.takeLast(memoryWindow) else hist
-            val W = recent.size
-            if (W == 1) {
-                val onlyFt = recent[0].finishTime
-                athlete.mu = onlyFt
-                athlete.sigma1 = 0.1 * onlyFt
-                athlete.sigma2 = 0.15 * onlyFt
-                continue
-            }
-            val rev = recent.reversed() // самый свежий в начале
-            val alpha = 1.0 / (W - 1)
-            val weights = rev.indices.map { i -> max(1.0 - i * alpha, 0.0) }
-            val sW = weights.sum()
-            val finishTimes = rev.map { it.finishTime }
-            val muNew = finishTimes.zip(weights).sumOf { (ft, w) -> ft * w } / sW
-            val varNew = finishTimes.zip(weights).sumOf { (ft, w) ->
-                val diff = ft - muNew
-                w * diff * diff
-            } / sW
-            val stdNew = sqrt(varNew)
-            athlete.mu = muNew
-            athlete.sigma1 = 0.7 * stdNew
-            athlete.sigma2 = 1.3 * stdNew
-        }
     }
 }
