@@ -311,10 +311,8 @@ class SimulationService(
             clampAthleteParams(athlete)
         }
 
-        // Если хотите жёстко сбрасывать, когда что-то пошло не так:
-        if (raceIndexCounter % 20 == 0) {
-            initializeAthletes()
-        }
+        // жёстко сбрасывать
+        initializeAthletes()
     }
 
     /**
