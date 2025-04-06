@@ -12,6 +12,10 @@ class RaceHistoryRepository(
         private const val RACES_KEY = "ALL_RACES"  // ключ, где храним всю историю
     }
 
+    fun clearHistory() {
+        redisTemplate.delete(RACES_KEY)
+    }
+
     /**
      * Загрузить все записи из Redis, или пустой список, если нет.
      */
