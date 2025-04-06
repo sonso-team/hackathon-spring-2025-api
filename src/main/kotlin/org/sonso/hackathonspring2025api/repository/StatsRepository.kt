@@ -5,4 +5,6 @@ import org.springframework.data.repository.CrudRepository
 import org.springframework.stereotype.Repository
 
 @Repository
-interface StatsRepository: CrudRepository<StatsEntity, Int>
+interface StatsRepository: CrudRepository<StatsEntity, Int> {
+    fun getStatsEntityByPersonName(personName: String): StatsEntity?
+}

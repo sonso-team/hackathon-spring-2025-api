@@ -27,7 +27,8 @@ class SocketSender(
 
             // Преобразуем в JSON и отправляем во фронт через WebSocket
             val json = objectMapper.writeValueAsString(response)
-            logger.info("Send data: {}", json)
+            logger.info("Response type: {}", response.type)
+            logger.debug("Send data: {}", json)
             val message = TextMessage(json)
 
             webSocketHandler.sessions.forEach { session ->
@@ -36,6 +37,6 @@ class SocketSender(
                 }
             }
         }
-        logger.debug("Time for operation: $time ms")
+        logger.info("Time for operation: $time ms")
     }
 }
