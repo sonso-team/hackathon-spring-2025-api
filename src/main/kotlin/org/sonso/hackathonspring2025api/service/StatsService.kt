@@ -28,14 +28,14 @@ class StatsService(
         logger.debug("Request to setStats: {}", request)
         val oldEntity = statsRepository.getStatsEntityByPersonName(request.personName)
 
-        val newEntity = StatsEntity(
-            id = oldEntity?.id,
-            personName = request.personName,
-            reactionTime = request.reactionTime ?: oldEntity?.reactionTime,
-            acceleration = request.acceleration ?: oldEntity?.acceleration,
-            maxSpeed = request.maxSpeed ?: oldEntity?.maxSpeed,
-            lsf = request.lsf ?: oldEntity?.lsf,
-        )
+        val newEntity = StatsEntity().apply {
+            this.id = oldEntity?.id
+            this.personName = request.personName
+            this.reactionTime = request.reactionTime ?: oldEntity?.reactionTime
+            this.acceleration = request.acceleration ?: oldEntity?.acceleration
+            this.maxSpeed = request.maxSpeed ?: oldEntity?.maxSpeed
+            this.lsf = request.lsf ?: oldEntity?.lsf
+        }
         logger.debug("New stats Entity: {}", newEntity)
 
         statsRepository.save(newEntity)

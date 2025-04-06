@@ -9,24 +9,24 @@ import jakarta.persistence.Table
 
 @Entity
 @Table(name = "stats")
-data class StatsEntity(
+class StatsEntity {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "id", nullable = false, unique = true)
-    val id: Int? = null,
+    var id: Int? = null
 
     @Column(name = "person_name", nullable = false, unique = true)
-    val personName: String,
+    var personName: String = ""
 
     @Column(name = "reaction_time", nullable = true, unique = false)
-    val reactionTime: Double?,
+    var reactionTime: Double? = null
 
     @Column(name = "acceleration", nullable = true, unique = false)
-    val acceleration: Double?,
+    var acceleration: Double? = null
 
     @Column(name = "max_speed", nullable = true, unique = false)
-    val maxSpeed: Double?,
+    var maxSpeed: Double? = null
 
     @Column(name = "lsf", nullable = true, unique = false)
-    val lsf: Double?,
-)
+    var lsf: Double? = null
+}
